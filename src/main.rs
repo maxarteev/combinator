@@ -63,7 +63,7 @@ fn create_merge_file(files: &BTreeMap<PathBuf, String>, mut path: String, merge_
 fn check_difference(files: &BTreeMap<PathBuf, String>, explode_line: &char) -> Result<(), Error> {
     let mut head_for_diff = String::new();
     
-    // 'outer: for (iter_files, (path, mut buff)) in files.iter().enumerate() {
+    'outer: for (iter_files, (path, mut buff)) in files.iter().enumerate() {
         // let mut buff = String::new();
         // let mut buff2 = String::new();
         // // println!("1 {:?}", file);
@@ -72,18 +72,33 @@ fn check_difference(files: &BTreeMap<PathBuf, String>, explode_line: &char) -> R
         // file.read_to_string(&mut buff2).expect("1111");
         // println!("1 {:?}", buff);
         // println!("2 {:?}", buff2);
-        // let first_line_index = buff.find("\r\n").unwrap();
+        let first_line_index = buff.find("\r\n").unwrap();
         // let first_line_index = buff.find("\r\n").unwrap();
 
-        // let first_line =  buff.get(0..first_line_index).unwrap().trim();
+        let first_line =  buff.get(0..first_line_index).unwrap().trim();
 
-        // if iter_files == 0 {
-        //     head_for_diff = first_line.to_string();
-        //     continue;
+        if iter_files == 0 {
+            head_for_diff = first_line.to_string();
+            continue;
+        }
+        if head_for_diff.split(*explode_line).count() == first_line.split(*explode_line).count() {
+            for (column_one, column_two) in head_for_diff.split_terminator(*explode_line).zip(first_line.split_terminator(*explode_line)) {
+                if column_one == column_two {continue};
+                
+                let (path_base, _) = files.first_key_value().unwrap();
+                println!("Заголовки в файлах: {:?} и {:?} отличаются. Различия {:?} с {:?}", path_base ,path, column_one, column_two);
+            }
+            continue;
+        }
+        
+        // println!("Заголовки в файлах: {:?}, {:?} отличаются. ", head_for_diff.split(*explode_line).count());
+        // println!("column_two : {:?}", first_line.split(*explode_line).count());
+
+        // for (column_one, column_two) in head_for_diff.split_terminator(*explode_line).zip(first_line.split_terminator(*explode_line)) {
+        //     println!("column_one : {:?}, column_two : {:?}", column_one, column_two);
         // }
-        // if head_for_diff != first_line {
-        //     println!("не равно : {:?} и {:?}", head_for_diff, first_line);
-        // }
+
+        // println!("не равно : {:?} и {:?}", head_for_diff, first_line);
         // println!("head_for_diff : {:?}", head_for_diff);
         
         
@@ -121,7 +136,7 @@ fn check_difference(files: &BTreeMap<PathBuf, String>, explode_line: &char) -> R
             // тут было бы неплохо проверку на кол-во строк и т.д.
         // }
         // println!("outer {:?}", head_for_diff);
-    // }
+    }
 
     // let hash = files.values().next().unwrap().first();
     // for (path, vec) in files.iter() {
@@ -134,6 +149,7 @@ fn check_difference(files: &BTreeMap<PathBuf, String>, explode_line: &char) -> R
 }
 
 fn files_to_string(files: BTreeMap<PathBuf, File>) -> BTreeMap<PathBuf, String> {
+    // let now = Instant::now();
     let mut btree = BTreeMap::new();
     for (iter_files, (path, mut file)) in files.into_iter().enumerate() {
         let mut buff = String::new();
@@ -142,6 +158,7 @@ fn files_to_string(files: BTreeMap<PathBuf, File>) -> BTreeMap<PathBuf, String> 
 
         btree.insert(path, buff);
     }
+    // println!("create_merged_file : {:.2?}", now.elapsed());
     btree
 }
 
