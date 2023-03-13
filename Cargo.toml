@@ -9,7 +9,7 @@ edition = "2021"
 dhat = "0.3.2"
 
 [profile.release]
-debug = 1
+debug = 0
 
 [profile.dev]
 debug = 1
