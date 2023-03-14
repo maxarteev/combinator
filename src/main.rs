@@ -1,13 +1,9 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused)]
-
+// какая то херня для профилировщика =)
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 use std::{
-    collections::{BTreeMap, HashMap},
     fs::{self, File},
     io::{self, prelude::*, Error, ErrorKind},
     path::PathBuf,
@@ -15,96 +11,44 @@ use std::{
         mpsc::{self, Sender},
         Arc, Mutex,
     },
-    thread::{self, JoinHandle},
-    time::{Instant, Duration},
+    thread,
+    time::Instant,
 };
 
+// кастомный сбор ошибок в вектор
 #[derive(Debug)]
 struct CustomCollectError(Vec<Error>);
 
 impl CustomCollectError {
-    fn new() -> Self {
+    fn new() -> Self { // инициализируем коллекцию ошибок
         CustomCollectError(vec![])
     }
-    fn push(&mut self, error: String) {
+    fn push(&mut self, error: String) { // помещаем ошибки в вектор
         self.0.push(Error::new(ErrorKind::Other, error));
     }
-    fn print_err(&self) {
+    fn print_all_err(&self) { // вывод ошибок на печать
         for err in self.0.iter() {
             println!("{}", err);
         }
     }
 }
-fn check_difference_btree(
-    path: Arc<PathBuf>,
-    buff: Arc<String>,
-    head_for_diff: Arc<String>,
-    path_base: &Arc<PathBuf>,
-    explode_line: &char,
-) {
-    let explode_line = *explode_line;
-    let mut custom_result = CustomCollectError::new();
-    let first_line_index = buff.find("\r\n").unwrap();
-    let first_line = buff.get(0..first_line_index).unwrap().trim();
 
-    let (head_for_diff_count, first_line_count) = (
-        head_for_diff.split(explode_line).count(),
-        first_line.split(explode_line).count(),
-    );
-    if head_for_diff_count == first_line_count {
-        for (column_one, column_two) in head_for_diff
-            .split_terminator(explode_line)
-            .zip(first_line.split_terminator(explode_line))
-        {
-            if column_one != column_two {
-                custom_result.push(format!(
-                    "Заголовки в файлах: `{:?}` и {:?} отличаются. Различия {} с {}",
-                    path, path_base, column_one, column_two
-                ));
-            };
-            
-        }
-    } else {
-        custom_result.push(
-            format!("В файлах: `{:?}` и `{:?}` количество заглавных столбцов отличается. В первом случае их {}, во втором {} ", 
-            path, path_base , head_for_diff_count, first_line_count
-        ));
-    }
-    for (line_index, line) in buff.split_terminator("\r\n").enumerate() {
-        // 
-        if line_index != 0 {
-            if line.split(explode_line).count() != head_for_diff_count {
-                // println!("path {:?}", path);
-                // println!("path {:?}", path_base);
-                // println!("line.split(explode_line).count() {:?}", line.split(explode_line).count());
-                // println!("head_for_diff_count {:?}", head_for_diff_count);
-                custom_result.push(format!(
-                    "В файле: `{:?}` и `{:?}` количество столбцов отличается. На линии {} ",
-                    path,
-                    path_base,
-                    line_index + 1
-                ));
-            }
-        }
-    }
-    custom_result.print_err();
-}
-
+// структура для пула потоков
 struct ThreadPool {
     threads: Vec<Option<thread::JoinHandle<()>>>,
     sender: Option<Sender<Box<dyn FnOnce() + Send + 'static>>>,
 }
 impl Drop for ThreadPool {
-    fn drop(&mut self) {
+    fn drop(&mut self) { // при завершении первого потока, вызывается ожидание завершения остальных потоков, вот такие мы хитрые
         let now = Instant::now();
-        drop(self.sender.take());
+        // чекаем завершения остальных потоков
         for worker in &mut self.threads {
             if let Some(thread) = worker.take() {
                 thread.join().unwrap();
             }
         }
-        println!("thread : {:.2?}", now.elapsed());
-        thread::sleep(Duration::from_millis(4000));
+        // считаем время на завершения всех потоков
+        println!("threads drop: {:.2?}", now.elapsed());
     }
 }
 impl ThreadPool {
@@ -139,125 +83,61 @@ impl ThreadPool {
     }
 }
 
-fn create_merge_file_thread(
-    file_for_result: Arc<Mutex<File>>,
+fn check_difference(
+    path: Arc<PathBuf>,
     buff: Arc<String>,
-) {
-    let first_line = buff.find("\r\n").unwrap();
-    write!(file_for_result.lock().unwrap(), "{}\r\n", buff.get(first_line..).unwrap()).unwrap();
-}
-
-fn create_merge_file(
-    files: &BTreeMap<Arc<PathBuf>, Arc<String>>,
-    mut path: PathBuf,
-    merge_file_name: &str,
-    _pool_size: usize,
-) -> Result<(), Error> {
-    let mut new_file = File::create(path)?;
-
-    for (iter_files, (_, buff)) in files.iter().enumerate() {
-        
-        let first_line = buff.find("\r\n").unwrap();
-
-        if iter_files == 0 {
-            write!(new_file, "{}\r\n", buff).unwrap();
-        } else {
-            write!(new_file, "{}\r\n", buff.get(first_line..).unwrap()).unwrap();
-        }
-    }
-    Ok(())
-}
-
-fn check_difference_multi_threads(
-    files: &BTreeMap<Arc<PathBuf>, Arc<String>>,
+    head_for_diff: Arc<String>,
+    path_base: &Arc<PathBuf>,
     explode_line: &char,
-    pool_size: usize,
-) -> Result<(), Error> {
-    let mut pool = ThreadPool::new(pool_size);
+) {
+    let explode_line = *explode_line;
+    let mut error_collection = CustomCollectError::new();
+    let first_line_index = buff.find("\r\n").unwrap();
+    let first_line = buff.get(0..first_line_index).unwrap().trim();
 
-    let (path_base_arc, string_base_arc) = files.first_key_value().expect("Path not found");
-    let string_base = Arc::clone(string_base_arc);
-    let base_line_index = string_base.find("\r\n").unwrap();
-    let base_line = string_base.get(0..base_line_index).unwrap().trim();
-    let head_for_diff_arc = Arc::new(base_line.to_string());
-    let sender = pool.sender.take().unwrap();
-
-    for (path_arc, buff_arc) in files.iter() {
-        let path_base = Arc::clone(path_base_arc);
-        let buff = Arc::clone(buff_arc);
-        let path = Arc::clone(path_arc);
-        let explode_line = *explode_line;
-        let head_for_diff = Arc::clone(&head_for_diff_arc);
-
-        let closure = move || {
-            let mut custom_result = CustomCollectError::new();
-            let first_line_index = buff.find("\r\n").unwrap();
-            let first_line = buff.get(0..first_line_index).unwrap().trim();
-
-            let (head_for_diff_count, first_line_count) = (
-                head_for_diff.split(explode_line).count(),
-                first_line.split(explode_line).count(),
-            );
-            if head_for_diff_count == first_line_count {
-                for (column_one, column_two) in head_for_diff
-                    .split_terminator(explode_line)
-                    .zip(first_line.split_terminator(explode_line))
-                {
-                    if column_one == column_two {
-                        continue;
-                    };
-                    custom_result.push(format!(
-                        "Заголовки в файлах: `{:?}` и {:?} отличаются. Различия {} с {}",
-                        path, path_base, column_one, column_two
-                    ));
-                }
-            } else {
-                custom_result.push(
-                    format!("В файлах: `{:?}` и `{:?}` количество заглавных столбцов отличается. В первом случае их {}, во втором {} ", 
-                    path, path_base , head_for_diff_count, first_line_count
+    let (head_for_diff_count, first_line_count) = (
+        head_for_diff.split(explode_line).count(),
+        first_line.split(explode_line).count(),
+    );
+    // если заголовки файлов не отличаются по количеству столбцов
+    if head_for_diff_count == first_line_count {
+        // чисто для проверки расхождения заголовков
+        for (column_one, column_two) in head_for_diff
+            .split_terminator(explode_line)
+            .zip(first_line.split_terminator(explode_line))
+        {
+            // проверяем, вдруг они отличаются по названию ! сук
+            if column_one != column_two {
+                error_collection.push(format!( 
+                    "Заголовки в файлах: `{:?}` и {:?} отличаются. Различия {} с {}",
+                    path, path_base, column_one, column_two
                 ));
-            }
-
-            for (line_index, line) in buff.split_terminator("\r\n").enumerate() {
-                if line_index == 0 {
-                    continue;
-                }
-                if line.split(explode_line).count() == head_for_diff_count {
-                    continue;
-                }
-                custom_result.push(format!(
+            };
+            
+        }
+    } else {
+        // ну тут пишем если даже количество столбцов заголовков отличается
+        error_collection.push(
+            format!("В файлах: `{:?}` и `{:?}` количество заглавных столбцов отличается. В первом случае их {}, во втором {} ", 
+            path, path_base , head_for_diff_count, first_line_count
+        ));
+    }
+    // проверяем разницу количества строк остальных файлов с нашим базовым файлом
+    for (line_index, line) in buff.split_terminator("\r\n").enumerate() {
+        // тут два if, да, херово выглядит! А че сделать, подскажите.
+        if line_index != 0 {
+            if line.split(explode_line).count() != head_for_diff_count {
+                error_collection.push(format!(
                     "В файле: `{:?}` и `{:?}` количество столбцов отличается. На линии {} ",
                     path,
                     path_base,
                     line_index + 1
                 ));
             }
-            custom_result.print_err();
-        };
-        sender.send(Box::new(closure)).unwrap();
+        }
     }
-    Ok(())
-}
-
-fn files_to_string(files: BTreeMap<PathBuf, File>) -> BTreeMap<Arc<PathBuf>, Arc<String>> {
-    let mut btree = BTreeMap::new();
-    for (path, mut file) in files.into_iter() {
-        let mut buff = String::new();
-        file.read_to_string(&mut buff).expect("1111");
-        btree.insert(Arc::new(path), Arc::new(buff));
-    }
-    btree
-}
-
-fn open_files(vec: Vec<PathBuf>) -> BTreeMap<PathBuf, File> {
-    let mut open_files = BTreeMap::new();
-    for path in vec.into_iter() {
-        open_files.insert(path.clone(), File::open(path).expect("wada"));
-    }
-    open_files
-}
-fn open_files_for_threads(path: PathBuf) -> (PathBuf, File) {
-    (path.clone(), File::open(path).expect("wada"))
+    // ну и собственно просим поток распечатать ошибки
+    error_collection.print_all_err();
 }
 
 fn get_files_path_in_dir(dir: &PathBuf, escape_file: &str) -> Result<Vec<PathBuf>, Error> {
@@ -268,77 +148,79 @@ fn get_files_path_in_dir(dir: &PathBuf, escape_file: &str) -> Result<Vec<PathBuf
     Ok(entries)
 }
 
+fn open_files(path: PathBuf) -> (PathBuf, File) {
+    (path.clone(), File::open(path).expect("wada"))
+}
+
+fn create_merge_file(
+    file_for_result: Arc<Mutex<File>>,
+    buff: Arc<String>,
+) {
+    let first_line = buff.find("\r\n").unwrap();
+    write!(file_for_result.lock().unwrap(), "{}", buff.get(first_line..).unwrap()).unwrap();
+}
 
 fn main() {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
 
     let now = Instant::now();
-    let explode_line = ',';
-    let path = PathBuf::from("F:/temp/csv/csv3/");
-    let base_file = "1.csv";
-    let base_file_for_eq = path.clone().join(base_file);
-    let merge_file_name = "merge.csv";
+    let explode_line = ','; // разделить 
+    let path = PathBuf::from("F:/temp/csv/csv3/"); // папка с файлами .csv
+    let base_file_name = "1.csv"; // какой файл берем за основу для проверок и мержа
+    let merge_file_name = "merge.csv"; // конечное название создаваемого файла
+    let pool_size = 8; // количество потоков, пока 8, чтобы забить весь проц уахаха
+
+    // соединяем общий путь с названием файла
+    let base_file_path = path.clone().join(base_file_name);
     let merge_file_path = path.clone().join(merge_file_name);
-    let pool_size = 8;
 
-
-
-
-/////-----------------------------------------------
-
+    // создаем потоки от pool_size
     let mut pool = ThreadPool::new(pool_size);
+    // инициализируем и забираем отправщика для последующего отправления замыканий
     let sender = pool.sender.take().unwrap();
 
+    // открываем файлы из папки и берем их названия (пропускаем первый - базовый файл, чтобы не было дублей)
     let files : Vec<(PathBuf, File)> = get_files_path_in_dir(&path, merge_file_name).unwrap()
-    .into_iter().filter(|x| *x != base_file_for_eq)
-    .map(|path |open_files_for_threads(path)).collect();
+    // .into_iter().filter(|x| *x != base_file_path)
+    .into_iter().map(open_files).collect(); // во как красиво можно вызывать функцию на каждое значение. Раст сука умный!
     
     let mut base_string = String::new();
-    File::open(base_file_for_eq.clone()).expect("wada").read_to_string(&mut base_string).expect("1111");
+    File::open(base_file_path.clone()).expect("Базовый файл не найден!").read_to_string(&mut base_string).expect("Базовый файл не может быть прочитан!");
     
-    let path_base_arc = Arc::new(base_file_for_eq);
-
+    let path_base_arc = Arc::new(base_file_path);
     let base_line_index = base_string.find("\r\n").unwrap();
     let base_line = base_string.get(0..base_line_index).unwrap().trim();
     let head_for_diff_arc = Arc::new(base_line.to_string());
 
     let file_for_result_arc = Arc::new(Mutex::new(File::create(merge_file_path).unwrap()));
-    write!(file_for_result_arc.lock().unwrap(), "{}\r\n", base_string).unwrap();
-
-
+    write!(file_for_result_arc.lock().unwrap(), "{}", base_string).unwrap();
 
     for (path_, mut file) in files.into_iter() {
-        let path_arc = Arc::new(path_.clone());
-        let path= Arc::clone(&path_arc);
+        // читаем файлы в строки
+        let mut buff_string = String::new();
+        file.read_to_string(&mut buff_string).expect("Не получается прочитать файл {path}");
+
+        // ну тут арки =)
+        let path_arc = Arc::new(path_);
         let path_base= Arc::clone(&path_base_arc);
         let head_for_diff = Arc::clone(&head_for_diff_arc);
-        let mut buff_string = String::new();
-        file.read_to_string(&mut buff_string).expect("1111");
         let buff = Arc::new(buff_string);
         let file_for_result = Arc::clone(&file_for_result_arc);
         
+        // кложура, которую потом передадим в sender
         let closure = move || {
-            check_difference_btree(Arc::clone(&path), Arc::clone(&buff), head_for_diff, &path_base, &explode_line);
-            if path != path_base {
-                create_merge_file_thread(file_for_result, Arc::clone(&buff));
+            // первая функция проверяет все файлы на различие заголовка базового файла со всеми остальнымы (с самим собой в том числе).
+            check_difference(Arc::clone(&path_arc), Arc::clone(&buff), head_for_diff, &path_base, &explode_line);
+            // а тут создается конечный файл и туда пропихиваются всё без обработки. if - чтобы базовый файл не попал второй раз в конечный файл - результат.
+            if Arc::clone(&path_arc) != path_base {
+                create_merge_file(file_for_result, Arc::clone(&buff));
             }
             
         };
+        // отправляет в поток
         sender.send(Box::new(closure)).unwrap();
     }
-
-    println!("done : {:.2?}", now.elapsed());
-    
-/////-----------------------------------------------
-  
-
-
-    // let files = get_files_path_in_dir(&path, merge_file_name)
-    //     .map(open_files)
-    //     .map(files_to_string)
-    //     .expect("Что-то пошло не так");
-    // check_difference_multi_threads(&files, &explode_line,pool_size).unwrap();
-    // create_merge_file(&files, merge_file_path, merge_file_name, pool_size).unwrap();
-    // println!("done : {:.2?}", now.elapsed());
+    // чекаем проход основного потока
+    println!("done main thread : {:.2?}", now.elapsed());
 }
