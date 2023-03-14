@@ -20,13 +20,16 @@ use std::{
 struct CustomCollectError(Vec<Error>);
 
 impl CustomCollectError {
-    fn new() -> Self { // инициализируем коллекцию ошибок
+    fn new() -> Self {
+        // инициализируем коллекцию ошибок
         CustomCollectError(vec![])
     }
-    fn push(&mut self, error: String) { // помещаем ошибки в вектор
+    fn push(&mut self, error: String) {
+        // помещаем ошибки в вектор
         self.0.push(Error::new(ErrorKind::Other, error));
     }
-    fn print_all_err(&self) { // вывод ошибок на печать
+    fn print_all_err(&self) {
+        // вывод ошибок на печать
         for err in self.0.iter() {
             println!("{}", err);
         }
@@ -39,7 +42,8 @@ struct ThreadPool {
     sender: Option<Sender<Box<dyn FnOnce() + Send + 'static>>>,
 }
 impl Drop for ThreadPool {
-    fn drop(&mut self) { // при завершении первого потока, вызывается ожидание завершения остальных потоков, вот такие мы хитрые
+    fn drop(&mut self) {
+        // при завершении первого потока, вызывается ожидание завершения остальных потоков, вот такие мы хитрые
         let now = Instant::now();
         // чекаем завершения остальных потоков
         for worker in &mut self.threads {
@@ -60,21 +64,17 @@ impl ThreadPool {
         for _ in 0..size {
             let rec = Arc::clone(&rec_arc);
 
-            threads.push(
-                Some(
-                    thread::spawn(move || loop {
-                        let message = rec.lock().unwrap().recv();
-                        match message {
-                            Ok(closure) => {
-                                closure();
-                            }
-                            Err(_) => {
-                                break;
-                            }
-                        }
-                    })
-                )
-            );
+            threads.push(Some(thread::spawn(move || loop {
+                let message = rec.lock().unwrap().recv();
+                match message {
+                    Ok(closure) => {
+                        closure();
+                    }
+                    Err(_) => {
+                        break;
+                    }
+                }
+            })));
         }
         ThreadPool {
             threads,
@@ -108,12 +108,11 @@ fn check_difference(
         {
             // проверяем, вдруг они отличаются по названию ! сук
             if column_one != column_two {
-                error_collection.push(format!( 
+                error_collection.push(format!(
                     "Заголовки в файлах: `{:?}` и {:?} отличаются. Различия {} с {}",
                     path, path_base, column_one, column_two
                 ));
             };
-            
         }
     } else {
         // ну тут пишем если даже количество столбцов заголовков отличается
@@ -142,7 +141,7 @@ fn check_difference(
 
 fn get_files_path_in_dir(dir: &PathBuf, escape_file: &str) -> Result<Vec<PathBuf>, Error> {
     let entries = fs::read_dir(dir)?
-        .filter(|res| matches!(res, Ok(e) if e.file_name() != escape_file))
+        .filter(|res| matches!(res, Ok(e) if e.file_name() != escape_file)) // тут пропускает уже смерженный файл, если запуск не первый и конечный файл уже существует
         .map(|res| res.map(|e| e.path()))
         .collect::<Result<Vec<_>, io::Error>>()?;
     Ok(entries)
@@ -152,12 +151,15 @@ fn open_files(path: PathBuf) -> (PathBuf, File) {
     (path.clone(), File::open(path).expect("wada"))
 }
 
-fn create_merge_file(
-    file_for_result: Arc<Mutex<File>>,
-    buff: Arc<String>,
-) {
+fn create_merge_file(file_for_result: Arc<Mutex<File>>, buff: Arc<String>) {
     let first_line = buff.find("\r\n").unwrap();
-    write!(file_for_result.lock().unwrap(), "{}", buff.get(first_line..).unwrap()).unwrap();
+    // пишем в файл, пропуская первую заглавную строку
+    write!(
+        file_for_result.lock().unwrap(),
+        "{}",
+        buff.get(first_line..).unwrap()
+    )
+    .unwrap();
 }
 
 fn main() {
@@ -165,15 +167,15 @@ fn main() {
     let _profiler = dhat::Profiler::new_heap();
 
     let now = Instant::now();
-    let explode_line = ','; // разделить 
-    let path = PathBuf::from("F:/temp/csv/csv3/"); // папка с файлами .csv
-    let base_file_name = "1.csv"; // какой файл берем за основу для проверок и мержа
+    let explode_line = ','; // разделить
+    let path = PathBuf::from("F:/temp/csv/csv2/"); // папка с файлами .csv
+    let base_file_name = "csv1.csv"; // какой файл берем за основу для проверок и мержа
     let merge_file_name = "merge.csv"; // конечное название создаваемого файла
     let pool_size = 8; // количество потоков, пока 8, чтобы забить весь проц уахаха
 
     // соединяем общий путь с названием файла
-    let base_file_path = path.clone().join(base_file_name);
-    let merge_file_path = path.clone().join(merge_file_name);
+    let base_file_path = path.join(base_file_name);
+    let merge_file_path = path.join(merge_file_name);
 
     // создаем потоки от pool_size
     let mut pool = ThreadPool::new(pool_size);
@@ -181,13 +183,18 @@ fn main() {
     let sender = pool.sender.take().unwrap();
 
     // открываем файлы из папки и берем их названия (пропускаем первый - базовый файл, чтобы не было дублей)
-    let files : Vec<(PathBuf, File)> = get_files_path_in_dir(&path, merge_file_name).unwrap()
-    // .into_iter().filter(|x| *x != base_file_path)
-    .into_iter().map(open_files).collect(); // во как красиво можно вызывать функцию на каждое значение. Раст сука умный!
-    
+    let files: Vec<(PathBuf, File)> = get_files_path_in_dir(&path, merge_file_name)
+        .unwrap()
+        .into_iter()
+        .map(open_files)
+        .collect(); // во как красиво можно вызывать функцию на каждое значение. Раст сука умный!
+
     let mut base_string = String::new();
-    File::open(base_file_path.clone()).expect("Базовый файл не найден!").read_to_string(&mut base_string).expect("Базовый файл не может быть прочитан!");
-    
+    File::open(base_file_path.clone())
+        .expect("Базовый файл не найден!")
+        .read_to_string(&mut base_string)
+        .expect("Базовый файл не может быть прочитан!");
+
     let path_base_arc = Arc::new(base_file_path);
     let base_line_index = base_string.find("\r\n").unwrap();
     let base_line = base_string.get(0..base_line_index).unwrap().trim();
@@ -199,24 +206,30 @@ fn main() {
     for (path_, mut file) in files.into_iter() {
         // читаем файлы в строки
         let mut buff_string = String::new();
-        file.read_to_string(&mut buff_string).expect("Не получается прочитать файл {path}");
+        file.read_to_string(&mut buff_string)
+            .expect("Не получается прочитать файл {path}");
 
         // ну тут арки =)
         let path_arc = Arc::new(path_);
-        let path_base= Arc::clone(&path_base_arc);
+        let path_base = Arc::clone(&path_base_arc);
         let head_for_diff = Arc::clone(&head_for_diff_arc);
         let buff = Arc::new(buff_string);
         let file_for_result = Arc::clone(&file_for_result_arc);
-        
+
         // кложура, которую потом передадим в sender
         let closure = move || {
             // первая функция проверяет все файлы на различие заголовка базового файла со всеми остальнымы (с самим собой в том числе).
-            check_difference(Arc::clone(&path_arc), Arc::clone(&buff), head_for_diff, &path_base, &explode_line);
+            check_difference(
+                Arc::clone(&path_arc),
+                Arc::clone(&buff),
+                head_for_diff,
+                &path_base,
+                &explode_line,
+            );
             // а тут создается конечный файл и туда пропихиваются всё без обработки. if - чтобы базовый файл не попал второй раз в конечный файл - результат.
             if Arc::clone(&path_arc) != path_base {
                 create_merge_file(file_for_result, Arc::clone(&buff));
             }
-            
         };
         // отправляет в поток
         sender.send(Box::new(closure)).unwrap();
