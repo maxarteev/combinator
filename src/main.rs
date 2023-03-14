@@ -121,7 +121,7 @@ fn check_difference(
             path, path_base , head_for_diff_count, first_line_count
         ));
     }
-    // проверяем разницу количества строк остальных файлов с нашим базовым файлом
+    // проверяем разницу количества столбцов остальных файлов с нашим базовой строкой
     for (line_index, line) in buff.split_terminator("\r\n").enumerate() {
         // тут два if, да, херово выглядит! А че сделать, подскажите.
         if line_index != 0 {
